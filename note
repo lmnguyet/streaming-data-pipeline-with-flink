@@ -1,0 +1,170 @@
+docker network create stream-net
+docker build -t producer-img ./producer
+
+docker image rm flink-img:1.20
+docker build -t flink-img:1.20.1 ./flink
+
+docker volume create metastore_volume
+docker volume create kafka_volume
+
+mysql 8.0 -> hive 3.0.0 -> flink 1.20.1 -> kafka 3.3.2
+
+docker compose up -d producer zookeeper kafka kafka-ui
+docker compose up -d mysql hive-metastore minio
+docker compose up -d jobmanager taskmanager
+docker compose run --rm --name sql-client sql-client
+
+python jobs/transform.py
+
+** INSTALL jars for flink-sql-connector-hive
+sudo apt update
+sudo apt install maven
+mvn -v
+
+git clone https://github.com/apache/flink-connector-hive.git
+cd flink/lib/flink-connector-hive-3.0.0/flink-sql-connector-hive-3.1.3
+mvn clean package -DskipTests
+
+docker cp flink/lib/ jobmanager:/opt/flink/lib/
+docker cp flink/lib/ taskmanager:/opt/flink/lib/
+
+/bitnami/kafka
+=============================
+kafka_orders
+
+CREATE CATALOG hive_catalog WITH (
+  'type' = 'hive',
+  'hive-conf-dir' = '/opt/hive-conf'
+);
+
+use catalog hive_catalog;
+
+CREATE TABLE IF NOT EXISTS kafka_orders (
+    order_id STRING,
+    user_id INT,
+    item STRING,
+    quantity INT,
+    unit_price DOUBLE,
+    total_amount DOUBLE,
+    payment_method STRING,
+    location ROW<city STRING, country STRING>,
+    event_time TIMESTAMP(3),
+    WATERMARK FOR event_time AS event_time - INTERVAL '5' SECOND
+)
+WITH (
+    'connector' = 'kafka',
+    'topic' = 'orders',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'orders-input',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'json',
+    'json.timestamp-format.standard' = 'ISO-8601'
+);
+
+SELECT
+    TUMBLE_START(event_time, INTERVAL '2' MINUTE) AS window_start,
+    TUMBLE_END(event_time, INTERVAL '2' MINUTE) AS window_end,
+    SUM(total_amount) AS revenue
+FROM kafka_orders
+GROUP BY TUMBLE(event_time, INTERVAL '2' MINUTE);
+
+===============
+
+1. window
+- tumble: tạo các cửa sổ không chồng nhau
+TUMBLE_START(order_date, INTERVAL '5' MINUTE) => tạo mỗi cửa sổ dài 5 phút và tính trên mỗi cửa sổ
+
+- sliding: cách 1 khoảng thời gian x, tạo 1 cửa sổ dài y => có thể chồng
+HOP_START(order_date, INTERVAL '10' SECOND, INTERVAL '1' MINUTE) => cách 10s, tạo 1 cửa sổ dài 1 phút
+=> 10:00:00-10:01:00 & 10:00:10-10:01:10,...
+
+2. watermark
+- cho phép mở rộng cửa sổ cho các record bị trễ (là độ trễ từ source -> kafka)
+WATERMARK FOR order_date AS order_date - INTERVAL '5' SECOND
+=> nếu record đến lúc 10:01:02 => trễ 2s vẫn được tính vào cửa sổ 10:01:00
+
+?event_time là timestamp từ đâu đến đâu?
+
+3. catalog
+
+4. offset
+
+5. properties group id
+================================
+
+kafka-topics --create --bootstrap-server localhost:9092 --topic sensor_data --partitions 1 --replication-factor 1
+kafka-topics --create --bootstrap-server localhost:9092 --topic transformed_sensor_data --partitions 1 --replication-factor 1
+
+kafka-console-consumer --bootstrap-server localhost:9092 --topic sensor_data --from-beginning
+kafka-console-consumer --bootstrap-server localhost:9092 --topic transformed_sensor_data --from-beginning
+
+CREATE CATALOG hive_catalog WITH (
+  'type' = 'hive',
+  'hive-conf-dir' = '/opt/hive-conf'
+);
+
+use catalog hive_catalog;
+
+CREATE TABLE foo (       
+			     c1 INT,                       
+			     c2 STRING                     
+			 ) WITH (                          
+			   'connector' = 'datagen',        
+			   'number-of-rows' = '8'          
+			 );
+
+CREATE TABLE IF NOT EXISTS kafka_orders1 (
+  order_id STRING,
+  user_id INT,
+  order_date TIMESTAMP(3),
+  item STRING,
+  quantity INT,
+  unit_price DOUBLE,
+  total_amount DOUBLE,
+  payment_method STRING,
+  location ROW<city STRING, country STRING>
+) WITH (
+  'connector' = 'kafka',
+  'topic' = 'orders',
+  'properties.bootstrap.servers' = 'kafka:9092',
+  'properties.group.id' = 'flink-sql-group',
+  'scan.startup.mode' = 'earliest-offset',
+  'format' = 'json',
+  'json.timestamp-format.standard' = 'ISO-8601'
+);
+
+table_env.execute_sql("""
+    CREATE TABLE IF NOT EXISTS test (
+        window_start TIMESTAMP(3),
+        window_end TIMESTAMP(3),
+        revenue DOUBLE
+    ) WITH (
+        'connector' = 'filesystem',
+        'path' = 's3://warehouse/test',
+        'format' = 'parquet'
+    );
+""")
+
+INSERT INTO test
+SELECT
+    TUMBLE_START(event_time, INTERVAL '5' MINUTE) AS window_start,
+    TUMBLE_END(event_time, INTERVAL '5' MINUTE) AS window_end,
+    SUM(total_amount) AS revenue
+FROM kafka_orders
+GROUP BY TUMBLE(event_time, INTERVAL '5' MINUTE);
+
+curl https://repo1.maven.org/maven2/com/fasterxml/woodstox/woodstox-core/5.3.0/woodstox-core-5.3.0.jar -o ./lib/hive/woodstox-core-5.3.0.jar
+curl https://repo1.maven.org/maven2/commons-logging/commons-logging/1.1.3/commons-logging-1.1.3.jar -o ./lib/hive/commons-logging-1.1.3.jar
+curl https://repo1.maven.org/maven2/org/apache/commons/commons-configuration2/2.1.1/commons-configuration2-2.1.1.jar -o ./lib/hive/commons-configuration2-2.1.1.jar
+curl https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-auth/3.3.2/hadoop-auth-3.3.2.jar -o ./lib/hive/hadoop-auth-3.3.2.jar
+curl https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-common/3.3.2/hadoop-common-3.3.2.jar -o ./lib/hive/hadoop-common-3.3.2.jar
+curl https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-hdfs-client/3.3.2/hadoop-hdfs-client-3.3.2.jar -o ./lib/hive/hadoop-hdfs-client-3.3.2.jar
+curl https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-mapreduce-client-core/3.3.2/hadoop-mapreduce-client-core-3.3.2.jar -o ./lib/hive/hadoop-mapreduce-client-core-3.3.2.jar
+curl https://repo1.maven.org/maven2/org/apache/hadoop/thirdparty/hadoop-shaded-guava/1.1.1/hadoop-shaded-guava-1.1.1.jar -o ./lib/hive/hadoop-shaded-guava-1.1.1.jar
+curl https://repo1.maven.org/maven2/org/codehaus/woodstox/stax2-api/4.2.1/stax2-api-4.2.1.jar -o ./lib/hive/stax2-api-4.2.1.jar
+
+
+
+====REF======
+https://www.decodable.co/blog/catalogs-in-flink-sql-hands-on
+https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/deployment/resource-providers/standalone/docker/#flink-sql-client-with-session-cluster

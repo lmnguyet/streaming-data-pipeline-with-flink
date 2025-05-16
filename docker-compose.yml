@@ -1,0 +1,181 @@
+services:
+    producer:
+        image: producer-img
+        container_name: producer
+        restart: always
+        volumes:
+            - ./scripts/produce_data.py:/app/produce_data.py
+        command: python3 /app/produce_data.py
+        depends_on:
+            kafka:
+                condition: service_healthy
+        networks:
+            - stream-net
+
+    zookeeper:
+        image: bitnami/zookeeper:3.8
+        container_name: zookeeper
+        hostname: zookeeper
+        ports:
+            - 2181:2181
+        environment:
+            - ALLOW_ANONYMOUS_LOGIN=yes
+        volumes:
+            - zookeeper_volume:/bitnami/zookeeper
+        healthcheck:
+            test: ["CMD", "zkServer.sh", "status"]
+            interval: 10s
+            timeout: 5s
+            retries: 10
+        networks:
+            - stream-net
+
+    kafka:
+        image: bitnami/kafka:3.3
+        container_name: kafka
+        hostname: kafka
+        ports:
+            - 9092:9092
+        env_file:
+            - envs/kafka.env
+        depends_on:
+            zookeeper:
+                condition: service_healthy
+        volumes:
+            - kafka_volume:/bitnami/kafka
+        healthcheck:
+            test: ["CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server", "kafka:9092", "--list"]
+            interval: 10s
+            timeout: 5s
+            retries: 10
+        networks:
+        - stream-net
+  
+    kafka-ui:
+        image: provectuslabs/kafka-ui:latest
+        container_name: kafka-ui
+        ports:
+            - 9089:8080
+        env_file:
+            - envs/kafka.env
+        depends_on:
+            kafka:
+                condition: service_healthy
+        networks:
+            - stream-net
+
+    jobmanager:
+        image: flink-img:1.20.1
+        container_name: jobmanager
+        ports:
+            - 8081:8081
+        command: jobmanager
+        volumes:
+            - ./scripts/transform.py:/opt/flink/jobs/transform.py
+            - ./hive/hive-conf:/opt/hive-conf:ro
+        environment:
+            - |
+                FLINK_PROPERTIES=
+                jobmanager.rpc.address: jobmanager
+        depends_on:
+            kafka:
+                condition: service_healthy
+        networks:
+            - stream-net        
+
+    taskmanager:
+        image: flink-img:1.20.1
+        container_name: taskmanager
+        command: taskmanager
+        scale: 1
+        volumes:
+            - ./hive/hive-conf:/opt/hive-conf:ro
+        environment:
+            - |
+                FLINK_PROPERTIES=
+                jobmanager.rpc.address: jobmanager
+                taskmanager.numberOfTaskSlots: 4
+                s3.endpoint: http://minio:9000
+                s3.access.key: minio
+                s3.secret.key: minio123
+                s3.path.style.access: true
+        depends_on:
+            - jobmanager
+        networks:
+            - stream-net
+            
+    sql-client:
+        image: flink-img:1.20.1
+        container_name: sql-client
+        command: bin/sql-client.sh
+        volumes:
+            - ./hive/hive-conf:/opt/hive-conf
+        environment:
+            - |
+                FLINK_PROPERTIES=
+                jobmanager.rpc.address: jobmanager
+                rest.address: jobmanager
+        depends_on:
+            - jobmanager
+        networks:
+            - stream-net
+
+    hive-metastore:
+        image: bitsondatadev/hive-metastore:latest
+        container_name: hive-metastore
+        hostname: hive-metastore
+        ports:
+            - 9083:9083
+        volumes:
+            - ./hive/metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
+        environment:
+            METASTORE_DB_HOSTNAME: mysql
+        depends_on:
+            - mysql
+            - minio
+        networks:
+            - stream-net
+
+    mysql:
+        image: mysql:8.0
+        container_name: mysql
+        hostname: mysql
+        restart: always
+        env_file:
+            - envs/mysql.env
+        ports:
+            - 3306:3306
+        volumes:
+            - metastore_volume:/var/lib/mysql
+        networks:
+            - stream-net
+
+    minio:
+        image: quay.io/minio/minio
+        container_name: minio
+        hostname: minio
+        ports:
+            - 9000:9000
+            - 9001:9001
+        env_file:
+            - envs/minio.env
+        volumes:
+            - warehouse_volume:/data
+        command: server /data --console-address ":9001"
+        networks:
+            - stream-net
+
+volumes:
+    metastore_volume:
+        external: true
+    warehouse_volume:
+        external: true
+    kafka_volume:
+        external: true
+    zookeeper_volume:
+        external: true
+
+networks:
+    stream-net:
+        external: true
+        name: stream-net
