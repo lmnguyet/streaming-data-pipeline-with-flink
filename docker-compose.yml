@@ -64,6 +64,19 @@ services:
         networks:
             - stream-net
 
+    kafka-connect:
+        image: kafka-connect-img:3.0
+        container_name: kafka-connect
+        ports:
+            - 8083:8083
+        env_file:
+            - envs/kafka-connect.env
+        depends_on:
+            kafka:
+                condition: service_healthy
+        networks:
+            - stream-net
+
     jobmanager:
         image: flink-img:1.20.1
         container_name: jobmanager
@@ -109,7 +122,7 @@ services:
         container_name: sql-client
         command: bin/sql-client.sh
         volumes:
-            - ./hive/hive-conf:/opt/hive-conf
+            - ./hive/hive-conf:/opt/hive-conf:ro
         environment:
             - |
                 FLINK_PROPERTIES=
@@ -146,7 +159,7 @@ services:
         ports:
             - 3306:3306
         volumes:
-            - metastore_volume:/var/lib/mysql
+            - mysql_volume:/var/lib/mysql
         networks:
             - stream-net
 
@@ -160,19 +173,49 @@ services:
         env_file:
             - envs/minio.env
         volumes:
-            - warehouse_volume:/data
-        command: server /data --console-address ":9001"
+            - minio_volume:/data
+        entrypoint: >
+            sh -c "
+                /usr/bin/docker-entrypoint.sh server /data --console-address :9001 &
+
+                echo 'Waiting for MinIO to be ready...';
+                sleep 5;
+
+                wget https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/bin/mc && chmod +x /usr/bin/mc;
+
+                mc alias set local http://localhost:9000 minio minio123;
+
+                mc mb --ignore-existing local/warehouse;
+
+                wait
+            "
+        networks:
+            - stream-net
+
+    clickhouse:
+        image: clickhouse/clickhouse-server
+        container_name: clickhouse
+        hostname: clickhouse
+        ports:
+            - 8123:8123
+            - 19000:9000
+        volumes:
+            - clickhouse_volume:/var/lib/clickhouse
+        env_file:
+            - envs/clickhouse.env
         networks:
             - stream-net
 
 volumes:
-    metastore_volume:
+    mysql_volume:
         external: true
-    warehouse_volume:
+    minio_volume:
         external: true
     kafka_volume:
         external: true
     zookeeper_volume:
+        external: true
+    clickhouse_volume:
         external: true
 
 networks:

@@ -1,12 +1,12 @@
 import time
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from faker import Faker
 from kafka import KafkaProducer
 
 KAFKA_BROKER = "kafka:9092"
-KAFKA_TOPIC = "orders"
+KAFKA_TOPIC = "source-orders"
 
 PRODUCER = KafkaProducer(bootstrap_servers=KAFKA_BROKER, value_serializer=lambda x:json.dumps(x).encode('utf-8'))
 
@@ -26,7 +26,7 @@ def generate_data():
             "city": FAKER.city(),
             "country": FAKER.country()
         },
-        "event_time": datetime.now().isoformat()
+        "event_time": (datetime.utcnow() + timedelta(hours=7)).isoformat()
     }
 
     data["total_amount"] = round(data["quantity"] * data["unit_price"], 3)

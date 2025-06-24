@@ -1,0 +1,23 @@
+{
+  "name": "clickhouse-connect",
+  "config": {
+    "connector.class": "com.clickhouse.kafka.connect.ClickHouseSinkConnector",
+    "tasks.max": "1",
+    "consumer.override.max.poll.records": "5000",
+    "consumer.override.max.partition.fetch.bytes": "5242880",
+    "database": "warehouse",
+    "topic2TableMap": "sink-revenue-each-2-min=revenue_each_2_min",
+    "errors.retry.timeout": "60",
+    "exactlyOnce": "true",
+    "hostname": "clickhouse",
+    "port": "8123",
+    "ssl": "false",
+    "jdbcConnectionProperties": "",
+    "username": "lminhnguyet",
+    "password": "123",
+    "topics": "sink-test",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "clickhouseSettings": ""
+  }
+}

@@ -1,18 +1,151 @@
+1. tạo network, volume và build các images
 docker network create stream-net
-docker build -t producer-img ./producer
 
-docker image rm flink-img:1.20
+docker build -t producer-img ./producer
+docker build -t kafka-connect-img:3.0 ./kafka-connect
 docker build -t flink-img:1.20.1 ./flink
 
-docker volume create metastore_volume
-docker volume create kafka_volume
+docker volume create zookeeper_volume && \
+docker volume create kafka_volume && \
+docker volume create mysql_volume && \
+docker volume create minio_volume && \
+docker volume create clickhouse_volume
+
+2. thứ tự chạy
+
+2.1. khởi tạo zookeeper và kafka
+docker compose up -d zookeeper kafka kafka-ui
+
+2.2. tạo các kafka topics source và sink
+docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic source-orders
+# docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic sink-test
+docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic sink-revenue-each-2-min
+
+2.3. đổ source data vào kafka topic
+docker compose up -d producer
+
+2.4. khởi tạo flink (hive metastore)
+docker compose up -d mysql hive-metastore minio
+docker compose up -d jobmanager taskmanager
+
+2.5. chạy flink job đẩy data từ topic source đến topic sink
+docker exec -it jobmanager python jobs/transform.py
+
+# check hoạt động của flink job
+docker compose run --rm --name sql-client sql-client
+# dùng hive catalog
+create catalog hive_catalog with (
+  'type' = 'hive',
+  'hive-conf-dir' = '/opt/hive-conf'
+);
+use catalog hive_catalog;
+# xem các bảng đã được tạo
+show tables;
+select * from kafka_source_orders;
+select * from kafka_revenue_each_2_min;
+# check offset của source data
+docker exec -it kafka kafka-consumer-groups.sh --bootstrap-server kafka:9092 --group source-orders-group --describe
+# check scan.startup.mode của bảng source (should be earliest) và data trên kafka ui
+docker exec -it mysql mysql -u lminhnguyet -p123 -D metastore
+select tp.* 
+from TBLS t
+inner join TABLE_PARAMS tp
+on t.TBL_ID = tp.TBL_ID
+docker exec -it jobmanager flink list
+where t.TBL_NAME = 'kafka_source_orders';
+# chạy lại flink job, check lại scan.startup.mode của bảng source (should be group-offsets) và data trên kafka ui
+
+2.6. khởi tạo clickhouse và kafka connect
+docker compose up -d clickhouse kafka-connect
+
+2.7. tạo bảng sink ở clickhouse
+docker exec -it clickhouse clickhouse-client --host localhost --port 9000 --user lminhnguyet --password 123 --database warehouse
+
+create table if not exists revenue_each_2_min (
+    window_start DateTime64(3),
+    window_end DateTime64(3),
+    revenue Float64
+) engine = MergeTree()
+order by window_start;
+
+2.8. tạo clickhouse connector
+curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d @kafka-connect/clickhouse-connector.json
+# kiểm tra connector được tạo
+curl -H "Accept:application/json" localhost:8083/connectors/
+# kiểm tra trạng thái của connector
+curl -s http://localhost:8083/connectors/clickhouse-connect/status | jq
+
+# == end
+
+CREATE TABLE IF NOT EXISTS sink-test (
+    order_id String,
+    user_id UInt32,
+    event_time DateTime64(3)
+) ENGINE = MergeTree()
+ORDER BY event_time;
+
+
+curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d @kafka-connect/clickhouse-connector.json
+curl -X DELETE http://localhost:8083/connectors/clickhouse-connect
+curl -H "Accept:application/json" localhost:8083/connectors/
+curl -s http://localhost:8083/connectors/clickhouse-connect/status | jq
+
+
+
+
+
 
 mysql 8.0 -> hive 3.0.0 -> flink 1.20.1 -> kafka 3.3.2
 
-docker compose up -d producer zookeeper kafka kafka-ui
+
+==================
+docker compose up -d zookeeper kafka kafka-ui
 docker compose up -d mysql hive-metastore minio
 docker compose up -d jobmanager taskmanager
+docker compose up -d clickhouse kafka-connect
+
+# curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d @kafka-connect/clickhouse-connector.json
+
+docker exec -it jobmanager python jobs/transform.py
+
+docker compose up -d producer
+
 docker compose run --rm --name sql-client sql-client
+
+docker exec -it clickhouse clickhouse-client --host localhost --port 9000 --user lminhnguyet --password 123 --database warehouse
+
+CREATE CATALOG hive_catalog WITH (
+  'type' = 'hive',
+  'hive-conf-dir' = '/opt/hive-conf'
+);
+
+use catalog hive_catalog;
+
+docker exec -it kafka kafka-consumer-groups.sh \
+  --bootstrap-server kafka:9092 \
+  --delete \
+  --group kafka-source-orders-group
+
+
+1. docker exec -it kafka kafka-consumer-groups.sh \
+  --bootstrap-server kafka:9092 \
+  --group orders-input-consumer-group \
+  --describe
+2. ALTER TABLE kafka_orders SET (
+  'scan.startup.mode' = 'group-offsets'
+);
+
+3. docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic source-orders
+
+4. docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic source_orders
+
+kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 \
+  --delete \
+  --group my-consumer-group
+
+
+========================
 
 python jobs/transform.py
 
@@ -29,6 +162,25 @@ docker cp flink/lib/ jobmanager:/opt/flink/lib/
 docker cp flink/lib/ taskmanager:/opt/flink/lib/
 
 /bitnami/kafka
+
+docker exec -it clickhouse clickhouse-client --host localhost --port 9000 --user lminhnguyet --password 123 --database warehouse
+docker cp flink/lib/clickhouse/clickhouse-*.jar jobmanager:/opt/flink/lib/
+docker cp flink/lib/clickhouse/*.jar taskmanager:/opt/flink/lib/
+docker cp flink/lib/clickhouse/*.jar sql-client:/opt/flink/lib/
+docker cp flink/lib/t/. jobmanager:/opt/flink/lib/
+
+curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" localhost:8083/connectors/ -d @kafka-connect/clickhouse-connector.json
+
+curl -H "Accept:application/json" localhost:8083/connectors/
+curl -X DELETE http://localhost:8083/connectors/clickhouse-connect
+
+CREATE TABLE IF NOT EXISTS revenue_each_5_min (
+    window_start DateTime64(3),
+    window_end DateTime64(3),
+    revenue Float64
+) ENGINE = MergeTree()
+ORDER BY window_start;
+
 =============================
 kafka_orders
 
@@ -68,6 +220,38 @@ SELECT
 FROM kafka_orders
 GROUP BY TUMBLE(event_time, INTERVAL '2' MINUTE);
 
+
+
+CREATE TABLE IF NOT EXISTS test (
+    window_start TIMESTAMP(3),
+    window_end TIMESTAMP(3),
+    revenue DOUBLE
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:clickhouse://clickhouse:8123/warehouse',
+    'table-name' = 'test',
+    'username' = 'lminhnguyet',
+    'password' = '123',
+    'driver' = 'ru.yandex.clickhouse.ClickHouseDriver'
+);
+
+INSERT INTO test
+SELECT
+    TUMBLE_START(event_time, INTERVAL '2' MINUTE) AS window_start,
+    TUMBLE_END(event_time, INTERVAL '2' MINUTE) AS window_end,
+    SUM(total_amount) AS revenue
+FROM kafka_orders
+GROUP BY TUMBLE(event_time, INTERVAL '2' MINUTE);
+
+CREATE TABLE if not exists datagen (
+id INT,
+number INT
+) WITH (
+'connector' = 'filesystem',
+'path' = 's3://warehouse/datagen',
+'format' = 'parquet'
+);
+insert into datagen values (1,2);
 ===============
 
 1. window
