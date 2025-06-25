@@ -51,8 +51,8 @@ select tp.*
 from TBLS t
 inner join TABLE_PARAMS tp
 on t.TBL_ID = tp.TBL_ID
+where t.TBL_NAME = 'kafka_source_orders'; 
 docker exec -it jobmanager flink list
-where t.TBL_NAME = 'kafka_source_orders';
 # chạy lại flink job, check lại scan.startup.mode của bảng source (should be group-offsets) và data trên kafka ui
 
 2.6. khởi tạo clickhouse và kafka connect
@@ -91,7 +91,12 @@ curl -H "Accept:application/json" localhost:8083/connectors/
 curl -s http://localhost:8083/connectors/clickhouse-connect/status | jq
 
 
-
+SELECT 
+    TUMBLE_START(event_time, INTERVAL '1' MINUTE) AS window_start,
+    TUMBLE_END(event_time, INTERVAL '1' MINUTE) AS window_end,
+    SUM(total_amount) AS revenue
+FROM kafka_source_orders
+GROUP BY TUMBLE(event_time, INTERVAL '1' MINUTE);
 
 
 
@@ -136,6 +141,7 @@ docker exec -it kafka kafka-consumer-groups.sh \
 );
 
 3. docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic source-orders
+3. docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --delete --topic __consumer_offsets
 
 4. docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic source_orders
 

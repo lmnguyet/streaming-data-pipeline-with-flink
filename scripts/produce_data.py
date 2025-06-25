@@ -43,7 +43,7 @@ def main():
             PRODUCER.send(topic=KAFKA_TOPIC, value=data)
             PRODUCER.flush()
             
-            time.sleep(random.randint(10, 30))
+            time.sleep(random.randint(3, 30))
     except KeyboardInterrupt:
         print("STOPPING PRODUCER ...")
     finally:

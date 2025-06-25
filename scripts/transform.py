@@ -1,6 +1,8 @@
 from pyflink.datastream import StreamExecutionEnvironment, CheckpointingMode
 from pyflink.table import StreamTableEnvironment
 from pyflink.table.catalog import ObjectPath
+from pyflink.common import RestartStrategies
+import time
 
 CATALOG_NAME = "hive_catalog"
 KAFKA_SERVER = "kafka:9092"
@@ -10,6 +12,7 @@ INPUT_TABLE = "kafka_source_orders"
 OUTPUT_TABLE = "kafka_sink_revenue_each_2_min"
 
 ENV = StreamExecutionEnvironment.get_execution_environment()
+ENV.set_parallelism(1)
 
 TABLE_ENV = StreamTableEnvironment.create(ENV)
 
@@ -25,12 +28,6 @@ TABLE_ENV.execute_sql(f"""
 TABLE_ENV.use_catalog(CATALOG_NAME)
 
 def create_tables(input_table=INPUT_TABLE, output_table=OUTPUT_TABLE, input_topic=INPUT_TOPIC, output_topic=OUTPUT_TOPIC):
-    if TABLE_ENV.get_catalog(CATALOG_NAME).table_exists(ObjectPath("default", input_table)):
-        TABLE_ENV.execute_sql(f"""
-            ALTER TABLE {input_table}
-            SET ('scan.startup.mode' = 'group-offsets')
-        """)
-
     TABLE_ENV.execute_sql(f"""
         CREATE TABLE IF NOT EXISTS {input_table} (
             order_id STRING,
@@ -48,13 +45,15 @@ def create_tables(input_table=INPUT_TABLE, output_table=OUTPUT_TABLE, input_topi
             'connector' = 'kafka',
             'topic' = '{input_topic}',
             'properties.bootstrap.servers' = '{KAFKA_SERVER}',
-            'scan.startup.mode' = 'earliest-offset',
             'properties.group.id' = '{input_topic}-group',
+            'scan.startup.mode' = 'group-offsets',
+            'properties.auto.offset.reset' = 'earliest',
+            'properties.enable.auto.commit' = 'true',
+            'properties.auto.commit.interval.ms' = '5000',
             'format' = 'json',
             'json.timestamp-format.standard' = 'ISO-8601'
         );
     """)
-
     TABLE_ENV.execute_sql(f"""
         CREATE TABLE IF NOT EXISTS {output_table} (
             window_start TIMESTAMP(3),
@@ -73,9 +72,14 @@ def create_tables(input_table=INPUT_TABLE, output_table=OUTPUT_TABLE, input_topi
 def calc_revenue_2_min(input_table=INPUT_TABLE, output_table=OUTPUT_TABLE):
     TABLE_ENV.execute_sql(f"""
         INSERT INTO {output_table}
-        SELECT order_id, user_id, event_time 
+        SELECT 
+            TUMBLE_START(event_time, INTERVAL '2' MINUTE) AS window_start,
+            TUMBLE_END(event_time, INTERVAL '2' MINUTE) AS window_end,
+            SUM(total_amount) AS revenue
         FROM {input_table}
-    """)
+        GROUP BY 
+            TUMBLE(event_time, INTERVAL '2' MINUTE);
+    """).wait()
 
 def main():
     create_tables()
