@@ -3,7 +3,7 @@ A **Docker-based** data pipeline to ingest and synchronize real-time data from *
 
 **Read the detailed article at:** [Streaming Data Pipeline With Flink and Kafka]()
 
-![]()
+![](images/stream_flink_flow.png)
 
 **What have been done in this pipeline**
 - Simulating the generating real-time data process and ingesting them into a Kafka topic.
@@ -60,12 +60,16 @@ Run Flink SQL Client to interact with Flink CLI:
 
 ```
 $ docker compose run --rm --name sql-client sql-client
+
+Flink SQL>
 ```
 
 Run ClickHouse Client to interact with ClickHouse database:
 
 ```
 $ docker exec -it clickhouse clickhouse-client --host localhost --port 9000 --user [your username] --password [your password] --database [your database]
+
+clickhouse :)
 ```
 
 ## Usage
@@ -108,7 +112,7 @@ Run a Flink job to do the transformation and write data into the Kafka topic ```
 docker exec -it jobmanager python jobs/transform.py
 ```
 
-You can check the results at Kafka UI: ```http://localhost:9089```
+You can check the results at Kafka UI: ```localhost:9089```
 
 Or, check the Flink tables at Flink CLI:
 
@@ -138,7 +142,7 @@ $ docker compose up -d clickhouse kafka-connect
 In ClickHouse CLI, create a sink table with appropriate schema:
 
 ```
-create table if not exists revenue_each_2_min (
+clickhouse :) create table if not exists revenue_each_2_min (
     window_start DateTime64(3),
     window_end DateTime64(3),
     revenue Float64
@@ -159,4 +163,19 @@ $ curl -H "Accept:application/json" localhost:8083/connectors/
 ["clickhouse-connector"]
 
 $ curl -s http://localhost:8083/connectors/clickhouse-connect/status | jq
+{
+  "name": "clickhouse-connect",
+  "connector": {
+    "state": "RUNNING",
+    "worker_id": "172.20.0.12:8083"
+  },
+  "tasks": [
+    {
+      "id": 0,
+      "state": "RUNNING",
+      "worker_id": "172.20.0.12:8083"
+    }
+  ],
+  "type": "sink"
+}
 ```

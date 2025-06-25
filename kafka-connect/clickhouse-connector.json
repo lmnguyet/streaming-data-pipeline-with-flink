@@ -8,16 +8,17 @@
     "database": "warehouse",
     "topic2TableMap": "sink-revenue-each-2-min=revenue_each_2_min",
     "errors.retry.timeout": "60",
-    "exactlyOnce": "true",
+    "exactlyOnce": "false",
     "hostname": "clickhouse",
     "port": "8123",
     "ssl": "false",
     "jdbcConnectionProperties": "",
     "username": "lminhnguyet",
     "password": "123",
-    "topics": "sink-test",
+    "topics": "sink-revenue-each-2-min",
     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
     "value.converter.schemas.enable": "false",
-    "clickhouseSettings": ""
+    "clickhouseSettings": "",
+    "clickhouse.keeper_map_path_prefix": "/clickhouse/kafka_connect"
   }
 }
