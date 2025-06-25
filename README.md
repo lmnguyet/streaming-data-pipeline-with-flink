@@ -82,7 +82,7 @@ $ docker compose up -d zookeeper kafka kafka-ui
 Create a topic to store source data:
 
 ```
-docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic source-orders
+$ docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --create --topic source-orders
 ```
 
 Generate random data and push them into the topic ```source-orders``` in JSON format:
@@ -109,7 +109,7 @@ $ docker compose up -d jobmanager taskmanager
 Run a Flink job to do the transformation and write data into the Kafka topic ```sink-revenue-each-2-min```
 
 ```
-docker exec -it jobmanager python jobs/transform.py
+$ docker exec -it jobmanager python jobs/transform.py
 ```
 
 You can check the results at Kafka UI: ```localhost:9089```
